@@ -1,0 +1,73 @@
+- name: puppet master ip
+  shell: echo {{hostvars['puppet-master']['ansible_ssh_host']}} > /tmp/ansi-test1
+
+- name: Install SSHPASS...
+  shell: apt-get install sshpass
+
+- name: Adjust time zone...
+  shell: /bin/cp -f /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+- name: Start to Configure hostname...
+  shell: sed -i "s/{{ansible_hostname}}/{{SELF_HOSTNAME}}/g" /etc/hostname
+
+- name: Start to add to hosts...
+  shell: echo "127.0.0.1              {{SELF_HOSTNAME}}" >> /etc/hosts &&
+         hostname {{SELF_HOSTNAME}}
+
+- name: Start to add Puppet Master to hosts...
+  shell: echo "{{hostvars['puppet-master']['ansible_ssh_host']}}      {{puppet_master}} {{puppet_master}}.novalocal" >> /etc/hosts &&
+         echo "{{orchestrator_ip}}                orchestrator" >> /etc/hosts
+
+
+- name: Start to log deployment id...
+  shell: echo {{deployment_id}} > /etc/deployment_id
+
+- name: Start to log cf domain, UAA urls, nagios server ip...
+  shell: echo {{cf_domain}}  > /etc/cf_domain &&
+         echo {{uaa_urls}} > /etc/uaa_url &&
+         echo {{nagios_server_ip}} > /etc/nagios_server_ip
+
+- name: Start to copy dpkg...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{packages_path}}/puppetlabs-release-precise.deb /tmp >> /tmp/config
+
+- name: Start to copy vcap...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{packages_path}}/vcap.tar /home/ubuntu >> /tmp/config
+         
+- name: Start to decompress vcap...
+  shell: /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+- name: Start to replace sourcelist...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{packages_path}}/sources_precise.list /etc/apt/sources.list >> /tmp/config
+
+- name: Start to run dpkg...
+  shell: dpkg -i /tmp/puppetlabs-release-precise.deb
+  
+- name: Start to update apt...
+  shell: apt-get update >> /tmp/config
+  ignore_errors: yes
+  
+- name: Start to install cURL...
+  shell: apt-get install -y --force-yes curl
+  
+- name: Start to install puppet...
+  shell: apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1 &&
+         apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+  
+- name: Start to config CF component...
+  shell: echo "[agent]" >> /etc/puppet/puppet.conf &&
+         echo "certname={{SELF_HOSTNAME}}" >> /etc/puppet/puppet.conf &&
+         echo "server={{puppet_master}}" >> /etc/puppet/puppet.conf &&
+         echo "report=true" >> /etc/puppet/puppet.conf &&
+         echo "pluginsync=true" >> /etc/puppet/puppet.conf &&
+         echo "reports=http,store" >> /etc/puppet/puppet.conf &&
+         echo "runinterval = 10m" >> /etc/puppet/puppet.conf &&
+         echo "ignorecache = true" >> /etc/puppet/puppet.conf
+  
+- name: Start to install...
+  shell: ping {{ hostvars['puppet-master']['ansible_ssh_host'] }} -c 5 &&
+         puppet agent --test >>  /tmp/config &&
+         puppet resource service puppet ensure=running enable=true >>  /tmp/config
+  ignore_errors: yes  
+  
+- name: Start to register Puppet Master node...
+  shell: curl -d "puppetmaster={{hostvars['puppet-master']['ansible_ssh_host']}}&deployment_id={{deployment_id}}" http://{{orchestrator_ip}}:9527/contrib/CFV2InstallProcess/cloudfoundry/puppet_master_ready >> /tmp/config

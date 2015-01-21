@@ -1,0 +1,9 @@
+{
+    "template_url": "http://10.32.105.189:9527/contrib/CFInstallProcess/cloudfoundry_heat_script/heat.yaml",
+    "parameters": {
+        "cf_domain": "pctestvcap.me",
+        "deployment_id": "10",
+        "uaa_urls": "\"uaa.pctestvcap.me\",\"login.pctestvcap.me\""
+    },
+    "timeout_mins": "300"
+}

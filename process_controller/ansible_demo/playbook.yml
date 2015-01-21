@@ -1,0 +1,58 @@
+---
+- hosts: puppet-master
+  sudo: yes
+  sudo_user: root
+  remote_user: elc
+  vars:
+    puppet_master: puppet-master
+    puppet_module_ip: 10.32.105.222
+    puppet_module_username: elc
+    puppet_module_password: dangerous
+    puppet_module_path: /home/elc/.puppet/modules
+    packages_path: /home/elc
+    orchestrator_ip: 10.32.105.241
+  tasks:
+  - include: tasks/puppet_master.yml
+
+- hosts: cfv2-layer1
+  sudo: yes
+  sudo_user: root
+  remote_user: elc
+  vars:
+    puppet_master: puppet-master
+    puppet_module_ip: 10.32.105.222
+    puppet_module_username: elc
+    puppet_module_password: dangerous
+    puppet_module_path: /home/elc/.puppet/modules
+    packages_path: /home/elc
+    deployment_id: 30
+    orchestrator_ip: 10.32.105.241
+    nagios_server_ip: 10.0.0.164
+    cf_domain: testcf2.com
+    uaa_urls: uaa.demovcap.me,login.demovcap.me
+  tasks:
+  - include: tasks/cf_component.yml
+    vars:
+        SELF_HOSTNAME: "cloud-haproxy-{{deployment_id}}-0"
+
+- hosts: cfv2-layer2
+  sudo: yes
+  sudo_user: root
+  remote_user: elc
+  vars:
+    puppet_master: puppet-master
+    puppet_module_ip: 10.32.105.222
+    puppet_module_username: elc
+    puppet_module_password: dangerous
+    puppet_module_path: /home/elc/.puppet/modules
+    packages_path: /home/elc
+    deployment_id: 30
+    orchestrator_ip: 10.32.105.241
+    nagios_server_ip: 10.0.0.164
+    cf_domain: testcf2.com
+    uaa_urls: uaa.demovcap.me,login.demovcap.me
+  tasks:
+  - include: tasks/cf_component.yml
+    vars:
+        SELF_HOSTNAME: "cloud-collector-{{deployment_id}}-0"
+

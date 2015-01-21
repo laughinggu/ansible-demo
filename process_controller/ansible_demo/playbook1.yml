@@ -1,0 +1,16 @@
+---
+- hosts: puppet-master
+  sudo: yes
+  sudo_user: root
+  remote_user: elc
+  tasks:
+    - name: say hi
+      shell: touch /tmp/ansi-test6
+
+- hosts: cfv2-layer1
+  sudo: yes
+  sudo_user: root
+  remote_user: elc
+  tasks:
+    - name: say hi
+      shell: touch /tmp/ansi-test6

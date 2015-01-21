@@ -1,0 +1,16 @@
+[puppet-master]
+puppet-master	ansible_ssh_host=10.32.170.72	ansible_ssh_user=elc	ansible_ssh_pass=dangerous	ansible_sudo_pass=dangerous
+
+[cfv2-layer1]
+cfv2-layer1	ansible_ssh_host=10.32.170.67	ansible_ssh_user=elc	ansible_ssh_pass=dangerous	ansible_sudo_pass=dangerous
+
+#[cfv2-layer2]
+#cfv2-layer2	ansible_ssh_host=10.32.170.78	ansible_ssh_user=elc	ansible_ssh_pass=dangerous	ansible_sudo_pass=dangerous
+
+#[cfv2-layer3]
+#cfv2-layer3	ansible_ssh_host=10.32.170.69	ansible_ssh_user=elc	ansible_ssh_pass=dangerous	ansible_sudo_pass=dangerous
+
+#[cfv2-layer4]
+#cfv2-layer4	ansible_ssh_host=10.32.170.69	ansible_ssh_user=elc	ansible_ssh_pass=dangerous	ansible_sudo_pass=dangerous
+
+

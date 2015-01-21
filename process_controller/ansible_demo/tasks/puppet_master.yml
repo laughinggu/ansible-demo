@@ -1,0 +1,65 @@
+- name: say hi
+  shell: echo {{ansible_hostname}} >> /tmp/ansi-test 
+
+- name: Install SSHPASS...
+  shell: apt-get install sshpass
+
+- name: Adjust time zone...
+  shell: /bin/cp -f /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+- name: Start to Configure hostname...
+  shell: sed -i "s/{{ansible_hostname}}/{{puppet_master}}/g" /etc/hostname && 
+         sed -i "s/{{ansible_hostname}}/{{puppet_master}}/g" /etc/hosts && 
+         hostname {{puppet_master}}
+
+- name: Start to add Puppet Master to hosts...
+  shell: echo "127.0.0.1              {{puppet_master}}" >> /etc/hosts
+
+- name: Start to copy dpkg...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{packages_path}}/puppetlabs-release-precise.deb /tmp >> /tmp/config
+  
+- name: Start to replace sourcelist...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{packages_path}}/sources_precise.list /etc/apt/sources.list >> /tmp/config
+    
+- name: Start to run dpkg...
+  shell: dpkg -i /tmp/puppetlabs-release-precise.deb
+
+- name: Start to update apt...
+  shell: apt-get update >> /tmp/config
+  ignore_errors: yes
+
+- name: Start to install cURL...
+  shell: apt-get install -y --force-yes curl
+
+- name: Start to install puppet master...
+  shell: apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1 && 
+         apt-get install -y --force-yes puppetmaster-common=3.4.3-1puppetlabs1 && 
+         apt-get install -y --force-yes puppetmaster=3.4.3-1puppetlabs1
+  tags: puppet
+
+- name: Start to config puppet master...
+  shell: echo "certname={{puppet_master}}" >> /etc/puppet/puppet.conf &&
+           echo "bindaddress=0.0.0.0" >> /etc/puppet/puppet.conf &&
+           echo "evaltrace = true" >> /etc/puppet/puppet.conf &&
+           echo "pluginsync=true" >> /etc/puppet/puppet.conf &&
+           echo "autosign=true" >> /etc/puppet/puppet.conf
+          
+
+- name: Start to config autosign.conf...
+  shell: echo "cloud*" >> /etc/puppet/autosign.conf
+  
+- name: Start to copy puppet modules...
+  shell: sshpass -p '{{puppet_module_password}}' scp -r -o StrictHostKeyChecking=no {{puppet_module_username}}@{{puppet_module_ip}}:{{puppet_module_path}}/* /etc/puppet/modules/ 
+  
+- name: Remove other cf version modules...
+  shell: find . -maxdepth 1 -regex './cloudfoundry.*' -type d -print | grep -v "cloudfoundryv2$" | xargs rm -rf
+
+- name: Download site.pp...
+  shell: cd /home/ubuntu &&
+         curl http://{{orchestrator_ip}}:9527/contrib/CFV2InstallProcess/mco/site.pp > /home/ubuntu/site.pp &&
+         cp /home/ubuntu/site.pp /etc/puppet/manifests &&
+         chmod 777 /etc/puppet/manifests &&
+         chmod 777 /etc/puppet/manifests/site.pp
+
+- name: Restart Puppet Master...
+  shell: /etc/init.d/puppetmaster restart

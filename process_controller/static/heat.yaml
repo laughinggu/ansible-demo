@@ -1,0 +1,1762 @@
+heat_template_version: 2013-05-23
+
+description: >
+  NEUTRON VERSION!!This template will automatically install a Cloud Foundry cluster in OpenStack. The reason why we don't use cloud-config to install Puppet, is we need a specified Puppet version.
+
+parameters:
+  key_name:
+    type: string
+    label: Key Name
+    default: cf_v1_keypair
+    description: Name of key-pair to be used for compute instance
+
+  cf_image_id:
+    type: string
+    description: Image used to install Cloud Foundry components
+    default: cf_base_image_v21
+
+  puppet_master:
+    type: string
+    label: Puppeot Master
+    default: puppet-master
+    description: The host name of Puppet Master node.
+
+  puppet_module_ip:
+    type: string
+    label: Module Server IP
+    default: 10.32.105.222
+    description: The Ip of server, which can find the Puppet Module
+
+  puppet_module_username:
+    type: string
+    label: Module Server Username
+    default: elc
+    description: The username of server, which can find the Puppet Module
+
+  puppet_module_password:
+    type: string
+    label: Module Server Password
+    default: dangerous
+    description: The password of server, which can find the Puppet Module
+
+  puppet_module_path:
+    type: string
+    label: Module Server Path
+    default: /home/elc/.puppet/modules
+    description: The Path of server, which put the Puppet Module
+
+  packages_path:
+    type: string
+    label: Module Server Path
+    default: /home/elc
+    description: The Path of server, which put the Puppet Module
+
+  nagios_server_ip:
+    type: string
+    label: Nagios Server IP
+    default: 10.32.105.164
+    description: The IP of Nagios server
+
+  cf_domain:
+    type: string
+    label: Cloud Foundry Domain
+    default: demovcap.me
+    description: The domain using in Cloud Foudnry
+
+  uaa_urls:
+    type: string
+    label: UAA URLs
+    default: '"uaa.demovcap.me","login.demovcap.me"'
+    description: The urls of UAA
+
+  deployment_id:
+    type: string
+    label: Deployment ID
+    default: 22
+    description: The ID of Deployment
+
+  orchestrator_ip:
+    type: string
+    label: Orchestrator Service
+    default: 10.32.105.189
+    description: The IP of Orchstrator service
+
+  ccdb_type:
+    type: string
+    label: CCDB's Type
+    default: mysql
+    description: The Type of CCDB
+
+  system_disk_partition:
+    type: string
+    label: System Disk Partition
+    default: /dev/vda1
+
+  ntp_server:
+    type: string
+    label: NTP Server IP
+    default: 10.32.97.145
+
+  nats_username:
+    type: string
+    label: NATs Username
+    default: nats
+
+  nats_password:
+    type: string
+    label: NATs Password
+    default: nats
+
+  monitor_ip:
+    type: string
+    label: Monitor IP
+    default: 10.32.105.211
+
+  # private_net_id:
+  #   type: string
+  #   description: ID of private network into which servers get deployed
+  #   default: 9e60995c-6dd2-4487-bb60-bb7d7245feff
+
+  # private_subnet_id:
+  #   type: string
+  #   description: ID of private sub network into which servers get deployed
+  #   default: f1aa3858-de28-4ddc-bde5-bb306d1d4720
+
+  public_net_id:
+    type: string
+    description: ID of public network for which floating IP addresses will be allocated
+    default: 382fef66-157d-4852-8949-d20503460363
+
+resources:
+
+#  puppet_master_floating_ip:
+#    type: AWS::EC2::EIPAssociation
+
+  internal_net:
+    type: OS::Neutron::Net
+
+  internal_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: internal_net }
+      cidr: "10.2.0.0/24"
+      ip_version: 4
+
+  internal_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info: { network: "382fef66-157d-4852-8949-d20503460363" }
+
+  internal_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: internal_router }
+      subnet: { get_resource: internal_subnet }
+
+
+  puppet_master_server_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet_id: { get_resource: internal_subnet }
+
+  puppet_master_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_resource: public_net_id }
+      port_id: { get_resource: puppet_master_server_port }
+
+  router_server_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet_id: { get_resource: internal_subnet }
+
+  router_server_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_resource: public_net_id }
+      port_id: { get_resource: router_server_port }
+
+  cf_securtiy_group: 
+    type: AWS::EC2::SecurityGroup
+    properties:
+      GroupDescription: Security for CF router.
+      SecurityGroupIngress: [
+        {
+           CidrIp: "0.0.0.0/0",
+           FromPort: "-1",
+           ToPort: "-1",
+           IpProtocol: "icmp",
+        },
+        {
+           CidrIp: "0.0.0.0/0",
+           FromPort: "1",
+           ToPort: "65535",
+           IpProtocol: "tcp",
+        },
+        {
+           CidrIp: "0.0.0.0/0",
+           FromPort: "1",
+           ToPort: "65535",
+           IpProtocol: "udp",
+        },
+      ]
+
+  puppet_master_server:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.medium.30G.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name: puppet-master
+
+      networks:
+        - port: { get_resource: puppet_master_server_port }
+
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/%puppet_master%/g" /etc/hostname
+            sed -i "s/${ORG_NAME}/%puppet_master%/g" /etc/hosts
+            hostname %puppet_master%
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "127.0.0.1               %puppet_master%" >> /etc/hosts
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update >> /tmp/config
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet master..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppetmaster-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppetmaster=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            cat >> /etc/puppet/puppet.conf << EOF
+            certname=%puppet_master%
+            bindaddress=0.0.0.0
+            evaltrace = true
+            pluginsync=true
+            autosign=true
+            EOF
+
+            echo "cloud*" >> /etc/puppet/autosign.conf
+
+            echo "Start to copy puppet modules..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%puppet_module_path%/* /etc/puppet/modules >> /tmp/config
+            find /etc/puppet/modules -maxdepth 1 -regex '.*cloudfoundry.*' -type d -print | grep -v "cloudfoundry$" | xargs rm -rf
+
+            echo "Download site.pp..." >> /tmp/config
+            cd /home/ubuntu
+            curl http://%orchestrator_ip%:9527/contrib/CFInstallProcess/mco/site.pp > /home/ubuntu/site.pp
+            cp /home/ubuntu/site.pp /etc/puppet/manifests
+            chmod 777 /etc/puppet/manifests
+            chmod 777 /etc/puppet/manifests/site.pp
+
+            echo "Restart Puppet Master..." >> /tmp/config
+            /etc/init.d/puppetmaster restart
+
+            echo "Done..." >> /tmp/config
+
+            # All is well so signal success
+            echo "Start to send signal to %P_WAIT_HANDLE% for success..." >> /tmp/config
+            /opt/aws/bin/cfn-signal -e 0 -r "Broker setup complete" "%P_WAIT_HANDLE%"
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_path%": { get_param: puppet_module_path }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+            "%P_WAIT_HANDLE%": { get_resource: puppet_wait_handle }
+
+#  puppet_master_floating_ip_association:
+#    type: AWS::EC2::EIPAssociation
+#    properties:
+#      AllocationId: { get_resource: puppet_master_floating_ip }
+#      InstanceId: { get_resource: puppet_master_server }
+
+  puppet_wait_handle:
+    type: AWS::CloudFormation::WaitConditionHandle
+
+  puppet_wait_condition:
+    type: AWS::CloudFormation::WaitCondition
+    depends_on: puppet_master_server
+    properties:
+      Handle: {get_resource: puppet_wait_handle}
+      Timeout: '6000'
+
+  cf_nats_server:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      name:
+        str_replace:
+            template: cloud-nats-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-nats-%deployment_id%-0"
+            SELF_IP = `hostname -I`
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-core"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install NATs..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+            # Send the Puppet Master Ready Signal to Orchestrator
+            echo "Start to register Puppet Master node" >> /tmp/config
+            curl -d "puppetmaster=%puppet_master_ip%&deployment_id=%deployment_id%" http://%orchestrator_ip%:9527/contrib/CFInstallProcess/cloudfoundry/puppet_master_ready >> /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+#  cf_router_floating_ip:
+#    type: AWS::EC2::EIP
+
+  cf_controller:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      name:
+        str_replace:
+            template: cloud-controller-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-controller-%deployment_id%-0"
+            SELF_IP = `hostname -I`
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-core"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Cloud Controller..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+
+  cf_stager_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core 
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-stager-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-stager-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-dea"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Stager..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_uaa_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core 
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-uaa-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-uaa-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-dea"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install MongoDB..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%cc_ip%": { get_attr: [cf_controller, first_address]  }
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_dea_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.medium.30G.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-dea-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-dea-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-dea"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install DEA..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_mysql_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-mysql-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-mysql-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+  
+  cf_router_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-router-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+
+      networks:
+        - port: { get_resource: router_server_port }
+
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-router-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+
+#  cf_router_floating_ip_association:
+#    type: AWS::EC2::EIPAssociation
+#    properties:
+#      EIP: { get_resource: cf_router_floating_ip }
+#      InstanceId: { get_resource: cf_router_1 }
+
+
+  cf_uaa_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-uaa-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-uaa-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+            
+  cf_healthmanager_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-healthmanager-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-healthmanager-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_rabbitmq_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-rabbitmq-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-rabbitmq-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_redis_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-redis-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-redis-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_postgresql_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-postgresql-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-postgresql-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+
+  cf_mongodb_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-mongodb-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-mongodb-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_vblob_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-vblob-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-vblob-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+  cf_collector_1:
+    type: OS::Nova::Server
+    depends_on: puppet_wait_condition
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.small.4core
+      key_name: { get_param: key_name }
+      security_groups: [{ get_resource: cf_securtiy_group }]
+      name:
+        str_replace:
+            template: cloud-collector-%deployment_id%-0
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-collector-%deployment_id%-0"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-service"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "%puppet_master_internal_ip%                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install Mysql..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping %puppet_master_internal_ip% -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_master_internal_ip%": { get_attr: [puppet_master_server, first_address] }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%puppet_master_ip%": { get_resource: puppet_master_floating_ip  }
+            "%nat_ip%": { get_attr: [cf_nats_server, first_address]  }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
+
+outputs:
+  instance_ip:
+    description: IP address of the deployed compute instance
+    value: { get_attr: [cf_controller, first_address] }

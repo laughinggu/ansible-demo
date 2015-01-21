@@ -1,0 +1,210 @@
+heat_template_version: 2013-05-23
+
+description: >
+  This template will automatically install a Cloud Foundry cluster in OpenStack. The reason why we don't use cloud-config to install Puppet, is we need a specified Puppet version.
+
+parameters:
+  key_name:
+    type: string
+    label: Key Name
+    default: cf-key
+    description: Name of key-pair to be used for compute instance
+
+  cf_image_id:
+    type: string
+    description: Image used to install Cloud Foundry components
+    default: cf_base_image_v21
+
+  puppet_master:
+    type: string
+    label: Puppet Master
+    default: puppet-master
+    description: The host name of Puppet Master node.
+
+  puppet_module_ip:
+    type: string
+    label: Module Server IP
+    default: 10.32.105.222
+    description: The Ip of server, which can find the Puppet Module
+
+  puppet_module_username:
+    type: string
+    label: Module Server Username
+    default: elc
+    description: The username of server, which can find the Puppet Module
+
+  puppet_module_password:
+    type: string
+    label: Module Server Password
+    default: dangerous
+    description: The password of server, which can find the Puppet Module
+
+  puppet_module_path:
+    type: string
+    label: Module Server Path
+    default: /home/elc/.puppet/modules
+    description: The Path of server, which put the Puppet Module
+
+  packages_path:
+    type: string
+    label: Module Server Path
+    default: /home/elc
+    description: The Path of server, which put the Puppet Module
+
+  nagios_server_ip:
+    type: string
+    label: Nagios Server IP
+    default: 10.32.105.164
+    description: The IP of Nagios server
+
+  cf_domain:
+    type: string
+    label: Cloud Foundry Domain
+    default: demovcap.me
+    description: The domain using in Cloud Foudnry
+
+  uaa_urls:
+    type: string
+    label: UAA URLs
+    default: '"uaa.demovcap.me","login.demovcap.me"'
+    description: The urls of UAA
+
+  deployment_id:
+    type: string
+    label: Deployment ID
+    default: 2
+    description: The ID of Deployment
+
+  orchestrator_ip:
+    type: string
+    label: Orchestrator Service
+    default: 10.32.105.189
+    description: The IP of Orchstrator service
+
+  ccdb_type:
+    type: string
+    label: CCDB's Type
+    default: mysql
+    description: The Type of CCDB
+
+  system_disk_partition:
+    type: string
+    label: System Disk Partition
+    default: /dev/vda1
+
+  ntp_server:
+    type: string
+    label: NTP Server IP
+    default: 10.32.97.145
+
+  nats_username:
+    type: string
+    label: NATs Username
+    default: nats
+
+  nats_password:
+    type: string
+    label: NATs Password
+    default: nats
+
+  monitor_ip:
+    type: string
+    label: Monitor IP
+    default: 10.32.105.211
+  
+  security_group:
+    type: String
+    lable: Security Group
+    default: default
+
+resources:
+  cf_dea_[^ID^]:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: cf_image_id }
+      flavor: m1.medium
+      key_name: { get_param: key_name }
+      security_groups: [{ get_param: security_group }]
+      name:
+        str_replace:
+            template: cloud-dea-%deployment_id%-[^ID^]
+            params: 
+                "%deployment_id%": {get_param: deployment_id}
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            SELF_HOSTNAME="cloud-dea-%deployment_id%-[^ID^]"
+
+            echo "Start to Configure hostname..." > /tmp/config
+            ORG_NAME=`cat /etc/hostname`
+            echo "Origin hostname is ${ORG_NAME} ..." >> /tmp/config
+            sed -i "s/${ORG_NAME}/${SELF_HOSTNAME}/g" /etc/hostname
+            sed -i "s/"cf-dea"/${SELF_HOSTNAME}/g" /etc/hosts
+            hostname ${SELF_HOSTNAME} 
+
+            echo "Start to add Puppet Master to hosts..." >> /tmp/config
+            echo "[^puppet_master_ip^]                %puppet_master%" >> /etc/hosts
+            echo "%orchestrator_ip%                     orchestrator" >> /etc/hosts
+
+            echo "Start to log cf domain..." >> /tmp/config
+            echo %cf_domain% > /etc/cf_domain
+
+            echo "Start to log UAA urls..." >> /tmp/config
+            echo %uaa_urls% > /etc/uaa_url
+
+            echo "Start to log nagios server ip..." >> /tmp/config
+            echo %nagios_server_ip% > /etc/nagios_server_ip
+
+            echo "Start to log deployment id..." >> /tmp/config
+            echo %deployment_id% > /etc/deployment_id
+
+            echo "Start to copy dpkg..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/puppetlabs-release-lucid.deb /tmp >> /tmp/config
+
+            echo "Start to copy vcap..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/vcap.tar /home/ubuntu >> /tmp/config
+            /bin/tar -xf /home/ubuntu/vcap.tar -C /home/ubuntu >> /tmp/config
+
+            echo "Start to replace sourcelist..." >> /tmp/config
+            sshpass -p '%puppet_module_password%' scp -r -o StrictHostKeyChecking=no %puppet_module_username%@%puppet_module_ip%:%packages_path%/sources.list /etc/apt/ >> /tmp/config
+
+            echo "Start to run dpkg..." >> /tmp/config
+            dpkg -i /tmp/puppetlabs-release-lucid.deb
+            echo "Start to update apt..." >> /tmp/config
+            apt-get update
+            echo "Start to install cURL..." >> /tmp/config
+            apt-get install -y --force-yes curl
+            echo "Start to install puppet..." >> /tmp/config
+            apt-get install -y --force-yes puppet-common=3.4.3-1puppetlabs1
+            apt-get install -y --force-yes puppet=3.4.3-1puppetlabs1
+            echo "Finish installing puppet..." >> /tmp/config
+
+            echo "Start to run Puppet to install DEA..." >> /tmp/config
+            cat >> /etc/puppet/puppet.conf << EOF
+            [agent]
+            certname=${SELF_HOSTNAME}
+            server=%puppet_master%
+            report=true
+            pluginsync=true
+            reports=http,store
+            runinterval = 10m
+            ignorecache = true
+            EOF
+
+            ping [^puppet_master_ip^]  -c 5
+            puppet agent --test >>  /tmp/config
+            puppet resource service puppet ensure=running enable=true >>  /tmp/config
+
+          params:
+            "%puppet_master%": { get_param: puppet_master }
+            "%puppet_module_ip%": { get_param: puppet_module_ip }
+            "%puppet_module_username%": { get_param: puppet_module_username }
+            "%puppet_module_password%": { get_param: puppet_module_password }
+            "%packages_path%": { get_param: packages_path }
+            "%cf_domain%": { get_param: cf_domain }
+            "%uaa_urls%": { get_param: uaa_urls }
+            "%nagios_server_ip%": { get_param: nagios_server_ip }
+            "%deployment_id%": {get_param: deployment_id}
+            "%orchestrator_ip%": { get_param: orchestrator_ip }
